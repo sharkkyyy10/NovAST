@@ -1,42 +1,58 @@
 use napi_derive::napi;
-use tree_sitter::{Parser, Language};
+use tree_sitter::{Parser, Language, Node};
+use std::collections::{HashSet, HashMap};
 
-#[napi]
-pub fn extract_skeleton(code: String, ext: String) -> Result<String, napi::Error> {
-    let language: Language = match ext.as_str() {
-        ".ts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        ".tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
-        ".js" => tree_sitter_javascript::LANGUAGE.into(),
-        ".py" => tree_sitter_python::LANGUAGE.into(),
-        ".cpp" | ".cc" => tree_sitter_cpp::LANGUAGE.into(),
-        ".go" => tree_sitter_go::LANGUAGE.into(),
-        ".rs" => tree_sitter_rust::LANGUAGE.into(),
-        ".rb" => tree_sitter_ruby::LANGUAGE.into(),
-        ".cs" => tree_sitter_c_sharp::LANGUAGE.into(),
-        ".java" => tree_sitter_java::LANGUAGE.into(),
-        ".dart" => tree_sitter_dart::LANGUAGE.into(),
-        _ => return Err(napi::Error::from_reason(format!("[NovAST] Unsupported language: {}", ext))),
-    };
+fn get_language(ext: &str) -> Result<Language, napi::Error> {
+    match ext {
+        ".ts" => Ok(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        ".tsx" => Ok(tree_sitter_typescript::LANGUAGE_TSX.into()),
+        ".js" => Ok(tree_sitter_javascript::LANGUAGE.into()),
+        ".py" => Ok(tree_sitter_python::LANGUAGE.into()),
+        ".cpp" | ".cc" => Ok(tree_sitter_cpp::LANGUAGE.into()),
+        ".go" => Ok(tree_sitter_go::LANGUAGE.into()),
+        ".rs" => Ok(tree_sitter_rust::LANGUAGE.into()),
+        ".rb" => Ok(tree_sitter_ruby::LANGUAGE.into()),
+        ".cs" => Ok(tree_sitter_c_sharp::LANGUAGE.into()),
+        ".java" => Ok(tree_sitter_java::LANGUAGE.into()),
+        ".dart" => Ok(tree_sitter_dart::LANGUAGE.into()),
+        _ => Err(napi::Error::from_reason(format!("[NovAST] Unsupported language: {}", ext))),
+    }
+}
 
-    let mut parser = Parser::new();
-    parser.set_language(&language).map_err(|_| napi::Error::from_reason("[NovAST] Failed to set language"))?;
-
-    let tree = parser.parse(&code, None).ok_or_else(|| napi::Error::from_reason("[NovAST] Failed to parse code"))?;
-    
-    let body_types = match ext.as_str() {
+fn get_body_types(ext: &str) -> Vec<&'static str> {
+    match ext {
         ".ts" | ".tsx" | ".js" => vec!["statement_block"],
         ".py" => vec!["block"],
         ".cpp" | ".cc" => vec!["compound_statement"],
         ".go" | ".rs" | ".cs" | ".java" | ".dart" => vec!["block"],
         ".rb" => vec!["body_statement", "do_block"],
         _ => vec!["statement_block", "block", "compound_statement", "body_statement", "do_block"],
-    };
+    }
+}
 
+fn get_strip_replacement(ext: &str) -> String {
+    if ext == ".rb" {
+        "# NovAST: Stripped".to_string()
+    } else if ext == ".py" {
+        ":\n    pass\n".to_string()
+    } else {
+        " { /* NovAST: Stripped */ }".to_string()
+    }
+}
+
+#[napi]
+pub fn extract_skeleton(code: String, ext: String) -> Result<String, napi::Error> {
+    let language = get_language(&ext)?;
+    let mut parser = Parser::new();
+    parser.set_language(&language).map_err(|_| napi::Error::from_reason("[NovAST] Failed to set language"))?;
+    let tree = parser.parse(&code, None).ok_or_else(|| napi::Error::from_reason("[NovAST] Failed to parse code"))?;
+    
+    let body_types = get_body_types(&ext);
     let mut edits = Vec::new();
     let mut cursor = tree.walk();
-    traverse_node(tree.root_node(), &body_types, ext.as_str(), &mut edits, &mut cursor);
+    
+    traverse_node(tree.root_node(), &body_types, &ext, &mut edits, &mut cursor);
 
-    // Apply edits in reverse order (bottom to top) to maintain byte offsets
     edits.sort_by(|a, b| b.0.cmp(&a.0));
 
     let mut skeleton = code.into_bytes();
@@ -48,20 +64,14 @@ pub fn extract_skeleton(code: String, ext: String) -> Result<String, napi::Error
 }
 
 fn traverse_node(
-    node: tree_sitter::Node, 
+    node: Node, 
     body_types: &[&str], 
     ext: &str, 
     edits: &mut Vec<(usize, usize, String)>,
     cursor: &mut tree_sitter::TreeCursor
 ) {
     if body_types.contains(&node.kind()) {
-        let replacement = if ext == ".rb" {
-            "# NovAST: Stripped".to_string()
-        } else if ext == ".py" {
-            ":\n    pass\n".to_string()
-        } else {
-            " { /* NovAST: Stripped */ }".to_string()
-        };
+        let replacement = get_strip_replacement(ext);
         edits.push((node.start_byte(), node.end_byte(), replacement));
         return;
     }
@@ -75,4 +85,200 @@ fn traverse_node(
         }
         cursor.goto_parent();
     }
+}
+
+#[napi]
+pub fn get_local_imports(code: String, ext: String) -> Result<Vec<String>, napi::Error> {
+    let language = get_language(&ext)?;
+    let mut parser = Parser::new();
+    parser.set_language(&language).map_err(|_| napi::Error::from_reason("[NovAST] Failed to set language"))?;
+    let tree = parser.parse(&code, None).ok_or_else(|| napi::Error::from_reason("[NovAST] Failed to parse code"))?;
+
+    let mut imports = HashSet::new();
+    
+    fn find_imports(node: Node, code: &str, imports: &mut HashSet<String>) {
+        if node.kind().contains("import") {
+            let mut walker = node.walk();
+            for child in node.children(&mut walker) {
+                if child.kind() == "string" || child.kind() == "string_literal" {
+                    let text = &code[child.start_byte()..child.end_byte()];
+                    let raw_path = text.replace("'", "").replace("\"", "");
+                    if raw_path.starts_with('.') {
+                        imports.insert(raw_path);
+                    }
+                }
+                if child.kind() == "relative_import" || (child.kind() == "dotted_name" && code[child.start_byte()..child.end_byte()].starts_with('.')) {
+                    let text = &code[child.start_byte()..child.end_byte()];
+                    imports.insert(text.replace('.', "/"));
+                }
+            }
+        }
+        
+        let mut walker = node.walk();
+        for child in node.children(&mut walker) {
+            find_imports(child, code, imports);
+        }
+    }
+
+    find_imports(tree.root_node(), &code, &mut imports);
+    
+    let mut result: Vec<String> = imports.into_iter().collect();
+    result.sort();
+    Ok(result)
+}
+
+#[napi]
+pub fn generate_heatmap(code: String, ext: String, cursor_line: u32) -> Result<String, napi::Error> {
+    let language = get_language(&ext)?;
+    let mut parser = Parser::new();
+    parser.set_language(&language).map_err(|_| napi::Error::from_reason("[NovAST] Failed to set language"))?;
+    let tree = parser.parse(&code, None).ok_or_else(|| napi::Error::from_reason("[NovAST] Failed to parse code"))?;
+    let root = tree.root_node();
+
+    // 1. Find Epicenter
+    let mut epicenter = root;
+    fn is_epicenter(kind: &str) -> bool {
+        kind.contains("function") || kind.contains("method") || kind.contains("class")
+    }
+
+    fn find_epicenter<'a>(node: Node<'a>, cursor_line: u32, epicenter: &mut Node<'a>) {
+        if cursor_line < node.start_position().row as u32 || cursor_line > node.end_position().row as u32 {
+            return;
+        }
+        if is_epicenter(node.kind()) {
+            *epicenter = node;
+        }
+        let mut walker = node.walk();
+        for child in node.children(&mut walker) {
+            find_epicenter(child, cursor_line, epicenter);
+        }
+    }
+
+    find_epicenter(root, cursor_line, &mut epicenter);
+
+    // 2. Collect Identifiers
+    let mut identifiers = HashSet::new();
+    fn collect_identifiers<'a>(node: Node<'a>, code: &'a str, identifiers: &mut HashSet<&'a str>) {
+        if node.kind().contains("identifier") {
+            identifiers.insert(&code[node.start_byte()..node.end_byte()]);
+        }
+        let mut walker = node.walk();
+        for child in node.children(&mut walker) {
+            collect_identifiers(child, code, identifiers);
+        }
+    }
+
+    if epicenter.id() != root.id() {
+        collect_identifiers(epicenter, &code, &mut identifiers);
+    }
+
+    // 3. Extract Periphery and Blast Radius
+    let periphery_types = vec![
+        "import_statement",
+        "import_declaration",
+        "import_from_statement",
+        "type_alias_declaration",
+        "interface_declaration",
+    ];
+
+    let mut periphery_nodes = Vec::new();
+    let mut blast_radius_nodes = HashMap::new();
+
+    let mut root_walker = root.walk();
+    for child in root.children(&mut root_walker) {
+        if child.id() == epicenter.id() {
+            continue;
+        }
+        if periphery_types.contains(&child.kind()) {
+            periphery_nodes.push(child);
+            continue;
+        }
+
+        if epicenter.id() != root.id() && (child.kind().contains("declaration") || is_epicenter(child.kind())) {
+            let mut is_related = false;
+
+            fn check_decl_name<'a>(n: Node<'a>, depth: u32, code: &'a str, identifiers: &HashSet<&'a str>, is_related: &mut bool) {
+                if *is_related || depth > 2 {
+                    return;
+                }
+                if n.kind().contains("identifier") || n.kind().contains("name") {
+                    let text = &code[n.start_byte()..n.end_byte()];
+                    if identifiers.contains(text) {
+                        *is_related = true;
+                    }
+                }
+                let mut walker = n.walk();
+                for c in n.children(&mut walker) {
+                    check_decl_name(c, depth + 1, code, identifiers, is_related);
+                }
+            }
+
+            check_decl_name(child, 0, &code, &identifiers, &mut is_related);
+            if is_related {
+                blast_radius_nodes.insert(child.start_byte(), child);
+            }
+        }
+    }
+
+    // 4. Build Output Strings
+    let body_types = get_body_types(&ext);
+    let strip_replacement = get_strip_replacement(&ext);
+
+    fn strip_node(node: Node, code: &str, body_types: &[&str], replacement: &str) -> String {
+        let mut edits = Vec::new();
+
+        fn traverse(n: Node, body_types: &[&str], edits: &mut Vec<(usize, usize)>) {
+            if body_types.contains(&n.kind()) {
+                edits.push((n.start_byte(), n.end_byte()));
+                return;
+            }
+            let mut walker = n.walk();
+            for c in n.children(&mut walker) {
+                traverse(c, body_types, edits);
+            }
+        }
+
+        traverse(node, body_types, &mut edits);
+
+        let mut text = code[node.start_byte()..node.end_byte()].to_string().into_bytes();
+        edits.sort_by(|a, b| b.0.cmp(&a.0));
+
+        for (start, end) in edits {
+            let rel_start = start.saturating_sub(node.start_byte());
+            let rel_end = end.saturating_sub(node.start_byte());
+            if rel_start <= text.len() && rel_end <= text.len() {
+                text.splice(rel_start..rel_end, replacement.as_bytes().iter().cloned());
+            }
+        }
+        String::from_utf8(text).unwrap_or_default()
+    }
+
+    let periphery_text = periphery_nodes.iter()
+        .map(|n| &code[n.start_byte()..n.end_byte()])
+        .collect::<Vec<_>>().join("\n");
+
+    let mut sorted_blast_nodes: Vec<_> = blast_radius_nodes.into_iter().collect();
+    sorted_blast_nodes.sort_by_key(|k| k.0);
+    
+    let blast_text = sorted_blast_nodes.into_iter()
+        .map(|(_, n)| strip_node(n, &code, &body_types, &strip_replacement))
+        .collect::<Vec<_>>().join("\n\n");
+
+    let epicenter_text = if epicenter.id() == root.id() {
+        code.to_string()
+    } else {
+        code[epicenter.start_byte()..epicenter.end_byte()].to_string()
+    };
+
+    let p_out = if periphery_text.is_empty() { "(none)".to_string() } else { periphery_text };
+    let b_out = if blast_text.is_empty() { "(none)".to_string() } else { blast_text };
+
+    let out = format!(
+        "// === [PERIPHERY: Imports & Types] ===\n{}\n\n// === [BLAST RADIUS: Related Signatures] ===\n{}\n\n// === [EPICENTER: Target Context] ===\n{}",
+        p_out,
+        b_out,
+        epicenter_text
+    );
+
+    Ok(out)
 }
