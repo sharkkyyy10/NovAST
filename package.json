@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "build:core": "cd novast-core && npm run build",
-    "build:cli": "tsup src/cli.ts --format cjs --clean --minify",
+    "build:cli": "tsup",
     "postbuild": "cp novast-core/*.node ./dist/ || true",
     "build": "npm run build:core && npm run build:cli",
     "dev": "ts-node src/cli.ts"

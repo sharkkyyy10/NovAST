@@ -5,3 +5,5 @@ export declare function extractSkeleton(code: string, ext: string): string
 export declare function generateHeatmap(code: string, ext: string, cursorLine: number): string
 
 export declare function getLocalImports(code: string, ext: string): Array<string>
+
+export declare function indexWorkspace(directory: string): string
