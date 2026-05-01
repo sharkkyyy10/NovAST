@@ -4,10 +4,10 @@ use tree_sitter::{Parser, Language};
 #[napi]
 pub fn extract_skeleton(code: String, ext: String) -> Result<String, napi::Error> {
     let language: Language = match ext.as_str() {
-        ".ts" => tree_sitter_typescript::language_typescript(),
-        ".tsx" => tree_sitter_typescript::language_tsx(),
-        ".js" => tree_sitter_javascript::language(),
-        ".py" => tree_sitter_python::language(),
+        ".ts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        ".tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        ".js" => tree_sitter_javascript::LANGUAGE.into(),
+        ".py" => tree_sitter_python::LANGUAGE.into(),
         _ => return Err(napi::Error::from_reason(format!("[NovAST] Unsupported language: {}", ext))),
     };
 
