@@ -580,3 +580,4 @@ module.exports.extractSkeleton = nativeBinding.extractSkeleton
 module.exports.generateHeatmap = nativeBinding.generateHeatmap
 module.exports.getLocalImports = nativeBinding.getLocalImports
 module.exports.indexWorkspace = nativeBinding.indexWorkspace
+module.exports.packContext = nativeBinding.packContext

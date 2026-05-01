@@ -7,3 +7,5 @@ export declare function generateHeatmap(code: string, ext: string, cursorLine: n
 export declare function getLocalImports(code: string, ext: string): Array<string>
 
 export declare function indexWorkspace(directory: string): string
+
+export declare function packContext(code: string, ext: string, maxTokens: number, cursorLine: number): string
