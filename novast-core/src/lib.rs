@@ -8,6 +8,13 @@ pub fn extract_skeleton(code: String, ext: String) -> Result<String, napi::Error
         ".tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
         ".js" => tree_sitter_javascript::LANGUAGE.into(),
         ".py" => tree_sitter_python::LANGUAGE.into(),
+        ".cpp" | ".cc" => tree_sitter_cpp::LANGUAGE.into(),
+        ".go" => tree_sitter_go::LANGUAGE.into(),
+        ".rs" => tree_sitter_rust::LANGUAGE.into(),
+        ".rb" => tree_sitter_ruby::LANGUAGE.into(),
+        ".cs" => tree_sitter_c_sharp::LANGUAGE.into(),
+        ".java" => tree_sitter_java::LANGUAGE.into(),
+        ".dart" => tree_sitter_dart::LANGUAGE.into(),
         _ => return Err(napi::Error::from_reason(format!("[NovAST] Unsupported language: {}", ext))),
     };
 
@@ -19,7 +26,10 @@ pub fn extract_skeleton(code: String, ext: String) -> Result<String, napi::Error
     let body_types = match ext.as_str() {
         ".ts" | ".tsx" | ".js" => vec!["statement_block"],
         ".py" => vec!["block"],
-        _ => vec!["statement_block", "block"],
+        ".cpp" | ".cc" => vec!["compound_statement"],
+        ".go" | ".rs" | ".cs" | ".java" | ".dart" => vec!["block"],
+        ".rb" => vec!["body_statement", "do_block"],
+        _ => vec!["statement_block", "block", "compound_statement", "body_statement", "do_block"],
     };
 
     let mut edits = Vec::new();
@@ -45,7 +55,9 @@ fn traverse_node(
     cursor: &mut tree_sitter::TreeCursor
 ) {
     if body_types.contains(&node.kind()) {
-        let replacement = if ext == ".py" {
+        let replacement = if ext == ".rb" {
+            "# NovAST: Stripped".to_string()
+        } else if ext == ".py" {
             ":\n    pass\n".to_string()
         } else {
             " { /* NovAST: Stripped */ }".to_string()
