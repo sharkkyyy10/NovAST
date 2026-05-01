@@ -40,4 +40,4 @@ novast src/auth.ts:42 "Add rate limiting"
 
 V1 runs a blistering fast Rust parser inside Node. V2 will be a 100% Rust LSP Daemon. 
 
-We are actively looking for open-source contributors to help oxidize the orchestration layer. If you want to build the future of autonomous agentic tooling, check out the issues and drop a PR.
+I am actively looking for open-source contributors to help oxidize the orchestration layer. If you want to build the future of autonomous agentic tooling, check out the issues and drop a PR.
