@@ -206,7 +206,7 @@ pub fn generate_heatmap(code: String, ext: String, cursor_line: u32) -> Result<S
                     return;
                 }
                 if n.kind().contains("identifier") || n.kind().contains("name") {
-                    let text = &code[n.start_byte()..n.end_byte()];
+                    let text = &code[n.start_byte()..n.byte_range().end];
                     if identifiers.contains(text) {
                         *is_related = true;
                     }
@@ -390,7 +390,7 @@ fn traverse_indexing(
 }
 
 #[napi]
-pub fn pack_context(code: String, ext: String, max_tokens: u32, cursor_line: u32) -> Result<String, napi::Error> {
+pub fn pack_context(code: String, ext: String, max_tokens: u32) -> Result<String, napi::Error> {
     let language = get_language(&ext)?;
     let mut parser = Parser::new();
     parser.set_language(&language).map_err(|_| napi::Error::from_reason("[NovAST] Failed to set language"))?;
@@ -400,73 +400,74 @@ pub fn pack_context(code: String, ext: String, max_tokens: u32, cursor_line: u32
         (text.chars().count() / 4).max(1) as u32
     }
 
-    struct PackedNode {
+    struct PackableBlock {
         start: usize,
         end: usize,
         weight: u32,
         value: u32,
     }
 
-    let mut nodes = Vec::new();
+    let mut blocks = Vec::new();
     let root = tree.root_node();
+    let body_types = get_body_types(&ext);
 
-    fn collect_packable_nodes(node: Node, cursor_line: u32, code: &str, nodes: &mut Vec<PackedNode>) {
-        let kind = node.kind();
-        if kind.contains("function") || kind.contains("class") || kind.contains("interface") || kind.contains("method") || kind.contains("declaration") {
-            let text = &code[node.start_byte()..node.end_byte()];
-            let weight = estimate_tokens(text);
+    fn collect_blocks(node: Node, depth: u32, code: &str, body_types: &[&str], blocks: &mut Vec<PackableBlock>) {
+        if body_types.contains(&node.kind()) {
+            let weight = estimate_tokens(&code[node.start_byte()..node.end_byte()]);
+            let value = if depth < 3 { 100 } else { 10 }; // Top-level vs deeply nested
             
-            let mut value = 10; // Unused / Default
-            if cursor_line >= node.start_position().row as u32 && cursor_line <= node.end_position().row as u32 {
-                value = 1000; // Epicenter
-            } else if node.kind().contains("import") {
-                value = 500; // Direct Import
-            }
-
-            nodes.push(PackedNode {
+            blocks.push(PackableBlock {
                 start: node.start_byte(),
                 end: node.end_byte(),
                 weight,
                 value,
             });
-            return; // Don't recurse into packable nodes to avoid nesting issues in knapsack
+            return;
         }
 
         let mut walker = node.walk();
         for child in node.children(&mut walker) {
-            collect_packable_nodes(child, cursor_line, code, nodes);
+            collect_blocks(child, depth + 1, code, body_types, blocks);
         }
     }
 
-    collect_packable_nodes(root, cursor_line, &code, &mut nodes);
+    collect_blocks(root, 0, &code, &body_types, &mut blocks);
 
-    // Greedy Knapsack (Value/Weight ratio)
-    nodes.sort_by(|a, b| {
+    // Greedy Sort: Sort by value/weight ratio
+    blocks.sort_by(|a, b| {
         let r_a = a.value as f32 / a.weight as f32;
         let r_b = b.value as f32 / b.weight as f32;
-        r_b.partial_cmp(&r_a).unwrap()
+        r_b.partial_cmp(&r_a).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let mut current_tokens = 0;
-    let mut selected_indices = HashSet::new();
+    let mut replacements = Vec::new();
 
-    for (i, node) in nodes.iter().enumerate() {
-        if current_tokens + node.weight <= max_tokens {
-            current_tokens += node.weight;
-            selected_indices.insert(i);
+    // We start assuming everything is kept. If total tokens > max, we start stripping from the worst ratio.
+    // Actually, the prompt says: "Iterate through the sorted blocks. If adding... keeps total below max_tokens, keep it intact."
+    // This implies starting from an empty set or a baseline.
+    // Let's use the requested logic:
+    
+    let mut allocated_tokens = estimate_tokens(&code);
+
+    
+    // Reverse sort to get the worst ones first for stripping
+    blocks.sort_by(|a, b| {
+        let r_a = a.value as f32 / a.weight as f32;
+        let r_b = b.value as f32 / b.weight as f32;
+        r_a.partial_cmp(&r_b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for block in blocks {
+        if allocated_tokens > max_tokens {
+            let saved = block.weight.saturating_sub(estimate_tokens("/* NovAST: Budget Exceeded */"));
+            replacements.push((block.start, block.end, "/* NovAST: Budget Exceeded */".to_string()));
+            allocated_tokens = allocated_tokens.saturating_sub(saved);
         }
     }
 
-    let mut edits = Vec::new();
-    for (i, node) in nodes.iter().enumerate() {
-        if !selected_indices.contains(&i) {
-            edits.push((node.start, node.end, "/* NovAST: Budget Exceeded */".to_string()));
-        }
-    }
-
-    edits.sort_by(|a, b| b.0.cmp(&a.0));
+    replacements.sort_by(|a, b| b.0.cmp(&a.0));
     let mut packed_code = code.into_bytes();
-    for (start, end, replacement) in edits {
+    for (start, end, replacement) in replacements {
         packed_code.splice(start..end, replacement.into_bytes());
     }
 
