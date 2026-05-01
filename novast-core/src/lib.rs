@@ -44,17 +44,86 @@ fn get_strip_replacement(ext: &str) -> String {
     }
 }
 
+fn is_named_scope(kind: &str) -> bool {
+    kind.contains("function") || kind.contains("method") || kind.contains("class")
+}
+
+// Returns all identifier-like names within a node (used for relevance filtering)
+fn node_identifier_names<'a>(node: Node<'a>, code: &'a str) -> Vec<&'a str> {
+    let mut names = Vec::new();
+    fn recurse<'a>(n: Node<'a>, code: &'a str, names: &mut Vec<&'a str>) {
+        let kind = n.kind();
+        if kind == "identifier" || kind == "type_identifier" || kind == "property_identifier" {
+            names.push(&code[n.start_byte()..n.end_byte()]);
+        }
+        let mut w = n.walk();
+        for c in n.children(&mut w) {
+            recurse(c, code, names);
+        }
+    }
+    recurse(node, code, &mut names);
+    names
+}
+
+// Replaces every body node with ";" — turns full implementations into compact signatures.
+// A 500-line class becomes a ~15-line interface skeleton. A function body becomes one line.
+fn to_signature_tree(node: Node, code: &str, body_types: &[&str]) -> String {
+    let node_start = node.start_byte();
+    let mut edits: Vec<(usize, usize)> = Vec::new();
+
+    fn find_bodies(n: Node, body_types: &[&str], edits: &mut Vec<(usize, usize)>) {
+        if body_types.contains(&n.kind()) {
+            edits.push((n.start_byte(), n.end_byte()));
+            return;
+        }
+        let mut w = n.walk();
+        for c in n.children(&mut w) {
+            find_bodies(c, body_types, edits);
+        }
+    }
+
+    find_bodies(node, body_types, &mut edits);
+    edits.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut text = code[node_start..node.end_byte()].to_string().into_bytes();
+    for (start, end) in edits {
+        let rs = start - node_start;
+        let re = end - node_start;
+        if rs <= text.len() && re <= text.len() {
+            text.splice(rs..re, b";".iter().cloned());
+        }
+    }
+    String::from_utf8(text).unwrap_or_default()
+}
+
+// Returns true if potential_ancestor is a strict ancestor of descendant in the AST
+fn is_ancestor(potential_ancestor: Node, descendant: Node) -> bool {
+    let target_id = potential_ancestor.id();
+    let mut current = descendant;
+    loop {
+        match current.parent() {
+            Some(p) => {
+                if p.id() == target_id {
+                    return true;
+                }
+                current = p;
+            }
+            None => return false,
+        }
+    }
+}
+
 #[napi]
 pub fn extract_skeleton(code: String, ext: String) -> Result<String, napi::Error> {
     let language = get_language(&ext)?;
     let mut parser = Parser::new();
     parser.set_language(&language).map_err(|_| napi::Error::from_reason("[NovAST] Failed to set language"))?;
     let tree = parser.parse(&code, None).ok_or_else(|| napi::Error::from_reason("[NovAST] Failed to parse code"))?;
-    
+
     let body_types = get_body_types(&ext);
     let mut edits = Vec::new();
     let mut cursor = tree.walk();
-    
+
     traverse_node(tree.root_node(), &body_types, &ext, &mut edits, &mut cursor);
 
     edits.sort_by(|a, b| b.0.cmp(&a.0));
@@ -68,11 +137,11 @@ pub fn extract_skeleton(code: String, ext: String) -> Result<String, napi::Error
 }
 
 fn traverse_node(
-    node: Node, 
-    body_types: &[&str], 
-    ext: &str, 
+    node: Node,
+    body_types: &[&str],
+    ext: &str,
     edits: &mut Vec<(usize, usize, String)>,
-    cursor: &mut tree_sitter::TreeCursor
+    cursor: &mut tree_sitter::TreeCursor,
 ) {
     if body_types.contains(&node.kind()) {
         let replacement = get_strip_replacement(ext);
@@ -99,7 +168,7 @@ pub fn get_local_imports(code: String, ext: String) -> Result<Vec<String>, napi:
     let tree = parser.parse(&code, None).ok_or_else(|| napi::Error::from_reason("[NovAST] Failed to parse code"))?;
 
     let mut imports = HashSet::new();
-    
+
     fn find_imports(node: Node, code: &str, imports: &mut HashSet<String>) {
         if node.kind().contains("import") {
             let mut walker = node.walk();
@@ -111,13 +180,16 @@ pub fn get_local_imports(code: String, ext: String) -> Result<Vec<String>, napi:
                         imports.insert(raw_path);
                     }
                 }
-                if child.kind() == "relative_import" || (child.kind() == "dotted_name" && code[child.start_byte()..child.end_byte()].starts_with('.')) {
+                if child.kind() == "relative_import"
+                    || (child.kind() == "dotted_name"
+                        && code[child.start_byte()..child.end_byte()].starts_with('.'))
+                {
                     let text = &code[child.start_byte()..child.end_byte()];
                     imports.insert(text.replace('.', "/"));
                 }
             }
         }
-        
+
         let mut walker = node.walk();
         for child in node.children(&mut walker) {
             find_imports(child, code, imports);
@@ -125,7 +197,7 @@ pub fn get_local_imports(code: String, ext: String) -> Result<Vec<String>, napi:
     }
 
     find_imports(tree.root_node(), &code, &mut imports);
-    
+
     let mut result: Vec<String> = imports.into_iter().collect();
     result.sort();
     Ok(result)
@@ -139,17 +211,15 @@ pub fn generate_heatmap(code: String, ext: String, cursor_line: u32) -> Result<S
     let tree = parser.parse(&code, None).ok_or_else(|| napi::Error::from_reason("[NovAST] Failed to parse code"))?;
     let root = tree.root_node();
 
-    // 1. Find Epicenter
+    // 1. Find the innermost named scope (function/method/class) containing the cursor
     let mut epicenter = root;
-    fn is_epicenter(kind: &str) -> bool {
-        kind.contains("function") || kind.contains("method") || kind.contains("class")
-    }
-
     fn find_epicenter<'a>(node: Node<'a>, cursor_line: u32, epicenter: &mut Node<'a>) {
-        if cursor_line < node.start_position().row as u32 || cursor_line > node.end_position().row as u32 {
+        if cursor_line < node.start_position().row as u32
+            || cursor_line > node.end_position().row as u32
+        {
             return;
         }
-        if is_epicenter(node.kind()) {
+        if is_named_scope(node.kind()) {
             *epicenter = node;
         }
         let mut walker = node.walk();
@@ -157,11 +227,10 @@ pub fn generate_heatmap(code: String, ext: String, cursor_line: u32) -> Result<S
             find_epicenter(child, cursor_line, epicenter);
         }
     }
-
     find_epicenter(root, cursor_line, &mut epicenter);
 
-    // 2. Collect Identifiers
-    let mut identifiers = HashSet::new();
+    // 2. Collect all identifiers referenced within the epicenter for relevance scoring
+    let mut identifiers: HashSet<&str> = HashSet::new();
     fn collect_identifiers<'a>(node: Node<'a>, code: &'a str, identifiers: &mut HashSet<&'a str>) {
         if node.kind().contains("identifier") {
             identifiers.insert(&code[node.start_byte()..node.end_byte()]);
@@ -171,13 +240,12 @@ pub fn generate_heatmap(code: String, ext: String, cursor_line: u32) -> Result<S
             collect_identifiers(child, code, identifiers);
         }
     }
-
     if epicenter.id() != root.id() {
         collect_identifiers(epicenter, &code, &mut identifiers);
     }
 
-    // 3. Extract Periphery and Blast Radius
-    let periphery_types = vec![
+    // 3. Classify root-level siblings into periphery (imports/types) and blast radius (related decls)
+    let periphery_kinds = [
         "import_statement",
         "import_declaration",
         "import_from_statement",
@@ -185,38 +253,64 @@ pub fn generate_heatmap(code: String, ext: String, cursor_line: u32) -> Result<S
         "interface_declaration",
     ];
 
-    let mut periphery_nodes = Vec::new();
-    let mut blast_radius_nodes = HashMap::new();
+    let mut periphery_nodes: Vec<Node> = Vec::new();
+    let mut blast_radius_nodes: HashMap<usize, Node> = HashMap::new();
 
     let mut root_walker = root.walk();
     for child in root.children(&mut root_walker) {
+        // Skip the epicenter itself
         if child.id() == epicenter.id() {
             continue;
         }
-        if periphery_types.contains(&child.kind()) {
-            periphery_nodes.push(child);
+
+        // Always surface the enclosing class/scope as a compact skeleton — losing the
+        // class structure entirely (which happened when the class name wasn't referenced
+        // in the method) was a major context loss.
+        if epicenter.id() != root.id() && is_ancestor(child, epicenter) {
+            blast_radius_nodes.insert(child.start_byte(), child);
             continue;
         }
 
-        if epicenter.id() != root.id() && (child.kind().contains("declaration") || is_epicenter(child.kind())) {
-            let mut is_related = false;
+        if periphery_kinds.contains(&child.kind()) {
+            if epicenter.id() == root.id() {
+                // No specific epicenter: keep all imports/types
+                periphery_nodes.push(child);
+            } else {
+                // Filter: only keep imports/types that export a name used by the epicenter.
+                // Drops unused React hooks, unrelated service imports, etc.
+                let names = node_identifier_names(child, &code);
+                if names.iter().any(|n| identifiers.contains(n)) {
+                    periphery_nodes.push(child);
+                }
+            }
+            continue;
+        }
 
-            fn check_decl_name<'a>(n: Node<'a>, depth: u32, code: &'a str, identifiers: &HashSet<&'a str>, is_related: &mut bool) {
+        // Blast radius: other top-level declarations whose name appears in the epicenter
+        if epicenter.id() != root.id()
+            && (child.kind().contains("declaration") || is_named_scope(child.kind()))
+        {
+            let mut is_related = false;
+            fn check_decl_name<'a>(
+                n: Node<'a>,
+                depth: u32,
+                code: &'a str,
+                identifiers: &HashSet<&'a str>,
+                is_related: &mut bool,
+            ) {
                 if *is_related || depth > 2 {
                     return;
                 }
                 if n.kind().contains("identifier") || n.kind().contains("name") {
-                    let text = &code[n.start_byte()..n.byte_range().end];
-                    if identifiers.contains(text) {
+                    if identifiers.contains(&code[n.start_byte()..n.end_byte()]) {
                         *is_related = true;
                     }
                 }
-                let mut walker = n.walk();
-                for c in n.children(&mut walker) {
+                let mut w = n.walk();
+                for c in n.children(&mut w) {
                     check_decl_name(c, depth + 1, code, identifiers, is_related);
                 }
             }
-
             check_decl_name(child, 0, &code, &identifiers, &mut is_related);
             if is_related {
                 blast_radius_nodes.insert(child.start_byte(), child);
@@ -224,49 +318,23 @@ pub fn generate_heatmap(code: String, ext: String, cursor_line: u32) -> Result<S
         }
     }
 
-    // 4. Build Output Strings
+    // 4. Render — blast radius uses compact ";" signatures instead of stripped stubs
     let body_types = get_body_types(&ext);
-    let strip_replacement = get_strip_replacement(&ext);
 
-    fn strip_node(node: Node, code: &str, body_types: &[&str], replacement: &str) -> String {
-        let mut edits = Vec::new();
-
-        fn traverse(n: Node, body_types: &[&str], edits: &mut Vec<(usize, usize)>) {
-            if body_types.contains(&n.kind()) {
-                edits.push((n.start_byte(), n.end_byte()));
-                return;
-            }
-            let mut walker = n.walk();
-            for c in n.children(&mut walker) {
-                traverse(c, body_types, edits);
-            }
-        }
-
-        traverse(node, body_types, &mut edits);
-
-        let mut text = code[node.start_byte()..node.end_byte()].to_string().into_bytes();
-        edits.sort_by(|a, b| b.0.cmp(&a.0));
-
-        for (start, end) in edits {
-            let rel_start = start.saturating_sub(node.start_byte());
-            let rel_end = end.saturating_sub(node.start_byte());
-            if rel_start <= text.len() && rel_end <= text.len() {
-                text.splice(rel_start..rel_end, replacement.as_bytes().iter().cloned());
-            }
-        }
-        String::from_utf8(text).unwrap_or_default()
-    }
-
-    let periphery_text = periphery_nodes.iter()
+    let periphery_text = periphery_nodes
+        .iter()
         .map(|n| &code[n.start_byte()..n.end_byte()])
-        .collect::<Vec<_>>().join("\n");
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    let mut sorted_blast_nodes: Vec<_> = blast_radius_nodes.into_iter().collect();
-    sorted_blast_nodes.sort_by_key(|k| k.0);
-    
-    let blast_text = sorted_blast_nodes.into_iter()
-        .map(|(_, n)| strip_node(n, &code, &body_types, &strip_replacement))
-        .collect::<Vec<_>>().join("\n\n");
+    let mut sorted_blast: Vec<_> = blast_radius_nodes.into_iter().collect();
+    sorted_blast.sort_by_key(|k| k.0);
+
+    let blast_text = sorted_blast
+        .into_iter()
+        .map(|(_, n)| to_signature_tree(n, &code, &body_types))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let epicenter_text = if epicenter.id() == root.id() {
         code.to_string()
@@ -274,17 +342,17 @@ pub fn generate_heatmap(code: String, ext: String, cursor_line: u32) -> Result<S
         code[epicenter.start_byte()..epicenter.end_byte()].to_string()
     };
 
-    let p_out = if periphery_text.is_empty() { "(none)".to_string() } else { periphery_text };
-    let b_out = if blast_text.is_empty() { "(none)".to_string() } else { blast_text };
+    // Compact section labels; skip empty sections entirely
+    let mut parts: Vec<String> = Vec::new();
+    if !periphery_text.is_empty() {
+        parts.push(format!("// [imports]\n{}", periphery_text));
+    }
+    if !blast_text.is_empty() {
+        parts.push(format!("// [related]\n{}", blast_text));
+    }
+    parts.push(format!("// [target]\n{}", epicenter_text));
 
-    let out = format!(
-        "// === [PERIPHERY: Imports & Types] ===\n{}\n\n// === [BLAST RADIUS: Related Signatures] ===\n{}\n\n// === [EPICENTER: Target Context] ===\n{}",
-        p_out,
-        b_out,
-        epicenter_text
-    );
-
-    Ok(out)
+    Ok(parts.join("\n\n"))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -301,14 +369,19 @@ struct ArchitecturalMap {
 
 #[napi]
 pub fn index_workspace(directory: String) -> Result<String, napi::Error> {
-    let supported_exts = vec![".ts", ".tsx", ".js", ".py", ".cpp", ".cc", ".go", ".rs", ".rb", ".cs", ".java", ".dart"];
-    
+    let supported_exts = vec![
+        ".ts", ".tsx", ".js", ".py", ".cpp", ".cc", ".go", ".rs", ".rb", ".cs", ".java", ".dart",
+    ];
+
     let files: Vec<String> = WalkDir::new(&directory)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
             let path = e.path();
-            path.is_file() && supported_exts.iter().any(|ext| path.to_string_lossy().ends_with(ext))
+            path.is_file()
+                && supported_exts
+                    .iter()
+                    .any(|ext| path.to_string_lossy().ends_with(ext))
         })
         .map(|e| e.path().to_string_lossy().into_owned())
         .collect();
@@ -318,13 +391,24 @@ pub fn index_workspace(directory: String) -> Result<String, napi::Error> {
 
     files.par_iter().for_each(|file_path| {
         if let Ok(code) = std::fs::read_to_string(file_path) {
-            let ext = std::path::Path::new(file_path).extension().and_then(|s| s.to_str()).map(|s| format!(".{}", s)).unwrap_or_default();
+            let ext = std::path::Path::new(file_path)
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| format!(".{}", s))
+                .unwrap_or_default();
             if let Ok(language) = get_language(&ext) {
                 let mut parser = Parser::new();
                 if parser.set_language(&language).is_ok() {
                     if let Some(tree) = parser.parse(&code, None) {
                         let mut walker = tree.walk();
-                        traverse_indexing(tree.root_node(), &code, file_path, &global_symbols, &global_references, &mut walker);
+                        traverse_indexing(
+                            tree.root_node(),
+                            &code,
+                            file_path,
+                            &global_symbols,
+                            &global_references,
+                            &mut walker,
+                        );
                     }
                 }
             }
@@ -339,14 +423,18 @@ pub fn index_workspace(directory: String) -> Result<String, napi::Error> {
     };
 
     for (name, (file, line)) in symbols_map.iter() {
-        architectural_map.symbols.insert(name.clone(), SymbolInfo {
-            file: file.clone(),
-            line: *line,
-            gravity: *references_map.get(name).unwrap_or(&0),
-        });
+        architectural_map.symbols.insert(
+            name.clone(),
+            SymbolInfo {
+                file: file.clone(),
+                line: *line,
+                gravity: *references_map.get(name).unwrap_or(&0),
+            },
+        );
     }
 
-    serde_json::to_string(&architectural_map).map_err(|e| napi::Error::from_reason(format!("[NovAST] Failed to serialize map: {}", e)))
+    serde_json::to_string(&architectural_map)
+        .map_err(|e| napi::Error::from_reason(format!("[NovAST] Failed to serialize map: {}", e)))
 }
 
 fn traverse_indexing(
@@ -363,14 +451,22 @@ fn traverse_indexing(
             let mut is_def = false;
             if let Some(parent) = node.parent() {
                 let kind = parent.kind();
-                if kind.contains("declaration") || kind.contains("definition") || kind.contains("class") || kind.contains("function") || kind.contains("method") {
+                if kind.contains("declaration")
+                    || kind.contains("definition")
+                    || kind.contains("class")
+                    || kind.contains("function")
+                    || kind.contains("method")
+                {
                     is_def = true;
                 }
             }
 
             if is_def {
                 let mut syms = symbols.lock().unwrap();
-                syms.insert(name.to_string(), (file_path.to_string(), node.start_position().row as u32));
+                syms.insert(
+                    name.to_string(),
+                    (file_path.to_string(), node.start_position().row as u32),
+                );
             } else {
                 let mut refs = references.lock().unwrap();
                 *refs.entry(name.to_string()).or_insert(0) += 1;
@@ -390,86 +486,123 @@ fn traverse_indexing(
 }
 
 #[napi]
-pub fn pack_context(code: String, ext: String, max_tokens: u32) -> Result<String, napi::Error> {
+pub fn pack_context(
+    code: String,
+    ext: String,
+    max_tokens: u32,
+    cursor_line: u32,
+) -> Result<String, napi::Error> {
     let language = get_language(&ext)?;
     let mut parser = Parser::new();
     parser.set_language(&language).map_err(|_| napi::Error::from_reason("[NovAST] Failed to set language"))?;
-    let tree = parser.parse(&code, None).ok_or_else(|| napi::Error::from_reason("[NovAST] Failed to parse code"))?;
-    
+    let tree = parser
+        .parse(&code, None)
+        .ok_or_else(|| napi::Error::from_reason("[NovAST] Failed to parse code"))?;
+
+    let body_types = get_body_types(&ext);
+
     fn estimate_tokens(text: &str) -> u32 {
         (text.chars().count() / 4).max(1) as u32
     }
 
-    struct PackableBlock {
+    struct PackedNode {
         start: usize,
         end: usize,
         weight: u32,
+        sig_weight: u32,
         value: u32,
+        signature: String,
     }
 
-    let mut blocks = Vec::new();
+    let mut nodes: Vec<PackedNode> = Vec::new();
     let root = tree.root_node();
-    let body_types = get_body_types(&ext);
 
-    fn collect_blocks(node: Node, depth: u32, code: &str, body_types: &[&str], blocks: &mut Vec<PackableBlock>) {
-        if body_types.contains(&node.kind()) {
-            let weight = estimate_tokens(&code[node.start_byte()..node.end_byte()]);
-            let value = if depth < 3 { 100 } else { 10 }; // Top-level vs deeply nested
-            
-            blocks.push(PackableBlock {
+    fn collect_packable_nodes(
+        node: Node,
+        cursor_line: u32,
+        code: &str,
+        body_types: &[&str],
+        nodes: &mut Vec<PackedNode>,
+    ) {
+        let kind = node.kind();
+        if kind.contains("function")
+            || kind.contains("class")
+            || kind.contains("interface")
+            || kind.contains("method")
+            || kind.contains("declaration")
+        {
+            let text = &code[node.start_byte()..node.end_byte()];
+            let weight = estimate_tokens(text);
+            let signature = to_signature_tree(node, code, body_types);
+            let sig_weight = estimate_tokens(&signature);
+
+            let mut value = 10;
+            if cursor_line >= node.start_position().row as u32
+                && cursor_line <= node.end_position().row as u32
+            {
+                value = 1000;
+            } else if node.kind().contains("import") {
+                value = 500;
+            }
+
+            nodes.push(PackedNode {
                 start: node.start_byte(),
                 end: node.end_byte(),
                 weight,
+                sig_weight,
                 value,
+                signature,
             });
             return;
         }
 
         let mut walker = node.walk();
         for child in node.children(&mut walker) {
-            collect_blocks(child, depth + 1, code, body_types, blocks);
+            collect_packable_nodes(child, cursor_line, code, body_types, nodes);
         }
     }
 
-    collect_blocks(root, 0, &code, &body_types, &mut blocks);
+    collect_packable_nodes(root, cursor_line, &code, &body_types, &mut nodes);
 
-    // Greedy Sort: Sort by value/weight ratio
-    blocks.sort_by(|a, b| {
+    // Greedy knapsack by value/weight ratio.
+    // Nodes can now degrade to signature-only instead of being fully dropped,
+    // preserving architectural context within tight budgets.
+    nodes.sort_by(|a, b| {
         let r_a = a.value as f32 / a.weight as f32;
         let r_b = b.value as f32 / b.weight as f32;
-        r_b.partial_cmp(&r_a).unwrap_or(std::cmp::Ordering::Equal)
+        r_b.partial_cmp(&r_a).unwrap()
     });
 
-    let mut replacements = Vec::new();
+    let mut current_tokens = 0u32;
+    let mut selected_full: HashSet<usize> = HashSet::new();
+    let mut selected_sig: HashSet<usize> = HashSet::new();
 
-    // We start assuming everything is kept. If total tokens > max, we start stripping from the worst ratio.
-    // Actually, the prompt says: "Iterate through the sorted blocks. If adding... keeps total below max_tokens, keep it intact."
-    // This implies starting from an empty set or a baseline.
-    // Let's use the requested logic:
-    
-    let mut allocated_tokens = estimate_tokens(&code);
+    for (i, node) in nodes.iter().enumerate() {
+        if current_tokens + node.weight <= max_tokens {
+            current_tokens += node.weight;
+            selected_full.insert(i);
+        } else if current_tokens + node.sig_weight <= max_tokens {
+            current_tokens += node.sig_weight;
+            selected_sig.insert(i);
+        }
+        // else: over budget even as a signature — drop entirely
+    }
 
-    
-    // Reverse sort to get the worst ones first for stripping
-    blocks.sort_by(|a, b| {
-        let r_a = a.value as f32 / a.weight as f32;
-        let r_b = b.value as f32 / b.weight as f32;
-        r_a.partial_cmp(&r_b).unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    for block in blocks {
-        if allocated_tokens > max_tokens {
-            let saved = block.weight.saturating_sub(estimate_tokens("/* NovAST: Budget Exceeded */"));
-            replacements.push((block.start, block.end, "/* NovAST: Budget Exceeded */".to_string()));
-            allocated_tokens = allocated_tokens.saturating_sub(saved);
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for (i, node) in nodes.iter().enumerate() {
+        if selected_sig.contains(&i) {
+            edits.push((node.start, node.end, node.signature.clone()));
+        } else if !selected_full.contains(&i) {
+            edits.push((node.start, node.end, String::new()));
         }
     }
 
-    replacements.sort_by(|a, b| b.0.cmp(&a.0));
+    edits.sort_by(|a, b| b.0.cmp(&a.0));
     let mut packed_code = code.into_bytes();
-    for (start, end, replacement) in replacements {
+    for (start, end, replacement) in edits {
         packed_code.splice(start..end, replacement.into_bytes());
     }
 
-    String::from_utf8(packed_code).map_err(|_| napi::Error::from_reason("[NovAST] Failed to build UTF-8 string"))
+    String::from_utf8(packed_code)
+        .map_err(|_| napi::Error::from_reason("[NovAST] Failed to build UTF-8 string"))
 }
