@@ -1,6 +1,10 @@
 use napi_derive::napi;
 use tree_sitter::{Parser, Language, Node};
 use std::collections::{HashSet, HashMap};
+use rayon::prelude::*;
+use walkdir::WalkDir;
+use serde::{Serialize, Deserialize};
+use std::sync::{Arc, Mutex};
 
 fn get_language(ext: &str) -> Result<Language, napi::Error> {
     match ext {
@@ -281,4 +285,106 @@ pub fn generate_heatmap(code: String, ext: String, cursor_line: u32) -> Result<S
     );
 
     Ok(out)
+}
+
+#[derive(Serialize, Deserialize)]
+struct SymbolInfo {
+    file: String,
+    line: u32,
+    gravity: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ArchitecturalMap {
+    symbols: HashMap<String, SymbolInfo>,
+}
+
+#[napi]
+pub fn index_workspace(directory: String) -> Result<String, napi::Error> {
+    let supported_exts = vec![".ts", ".tsx", ".js", ".py", ".cpp", ".cc", ".go", ".rs", ".rb", ".cs", ".java", ".dart"];
+    
+    let files: Vec<String> = WalkDir::new(&directory)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let path = e.path();
+            path.is_file() && supported_exts.iter().any(|ext| path.to_string_lossy().ends_with(ext))
+        })
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
+
+    let global_symbols = Arc::new(Mutex::new(HashMap::<String, (String, u32)>::new()));
+    let global_references = Arc::new(Mutex::new(HashMap::<String, u32>::new()));
+
+    files.par_iter().for_each(|file_path| {
+        if let Ok(code) = std::fs::read_to_string(file_path) {
+            let ext = std::path::Path::new(file_path).extension().and_then(|s| s.to_str()).map(|s| format!(".{}", s)).unwrap_or_default();
+            if let Ok(language) = get_language(&ext) {
+                let mut parser = Parser::new();
+                if parser.set_language(&language).is_ok() {
+                    if let Some(tree) = parser.parse(&code, None) {
+                        let mut walker = tree.walk();
+                        traverse_indexing(tree.root_node(), &code, file_path, &global_symbols, &global_references, &mut walker);
+                    }
+                }
+            }
+        }
+    });
+
+    let symbols_map = global_symbols.lock().unwrap();
+    let references_map = global_references.lock().unwrap();
+
+    let mut architectural_map = ArchitecturalMap {
+        symbols: HashMap::new(),
+    };
+
+    for (name, (file, line)) in symbols_map.iter() {
+        architectural_map.symbols.insert(name.clone(), SymbolInfo {
+            file: file.clone(),
+            line: *line,
+            gravity: *references_map.get(name).unwrap_or(&0),
+        });
+    }
+
+    serde_json::to_string(&architectural_map).map_err(|e| napi::Error::from_reason(format!("[NovAST] Failed to serialize map: {}", e)))
+}
+
+fn traverse_indexing(
+    node: Node,
+    code: &str,
+    file_path: &str,
+    symbols: &Arc<Mutex<HashMap<String, (String, u32)>>>,
+    references: &Arc<Mutex<HashMap<String, u32>>>,
+    cursor: &mut tree_sitter::TreeCursor,
+) {
+    if node.kind().contains("identifier") || node.kind().contains("name") {
+        let name = &code[node.start_byte()..node.end_byte()];
+        if !name.is_empty() {
+            let mut is_def = false;
+            if let Some(parent) = node.parent() {
+                let kind = parent.kind();
+                if kind.contains("declaration") || kind.contains("definition") || kind.contains("class") || kind.contains("function") || kind.contains("method") {
+                    is_def = true;
+                }
+            }
+
+            if is_def {
+                let mut syms = symbols.lock().unwrap();
+                syms.insert(name.to_string(), (file_path.to_string(), node.start_position().row as u32));
+            } else {
+                let mut refs = references.lock().unwrap();
+                *refs.entry(name.to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    if cursor.goto_first_child() {
+        loop {
+            traverse_indexing(cursor.node(), code, file_path, symbols, references, cursor);
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+        cursor.goto_parent();
+    }
 }
