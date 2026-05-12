@@ -10,6 +10,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { generateHeatmap, index_workspace } from '../novast-core';
 import * as path from 'path';
+import * as http from 'http';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -67,13 +68,32 @@ async function updateContext(document: TextDocument, cursorLine: number = 0) {
   }
 }
 
+
 connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
   if (params.command === 'novast.generateContext') {
-    // In a real LSP, we might return this to the client via a custom message
-    // For now, we return it as a result of the command
     return lastHeatmap;
   }
 });
 
+// Mad Scientist: HTTP Bridge for Web LLMs
+const bridgeServer = http.createServer((req, res) => {
+  // CORS for web LLMs
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET');
+  
+  if (req.url === '/context') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ context: lastHeatmap }));
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+
+bridgeServer.listen(6543, () => {
+  connection.console.log('[NovAST Bridge] HTTP Server running on port 6543');
+});
+
 documents.listen(connection);
 connection.listen();
+

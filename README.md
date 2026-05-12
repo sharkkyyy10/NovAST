@@ -19,6 +19,7 @@ NovAST is a high-performance CLI middleware that acts as a surgical **Input Rout
 - **Universal Polyglot Support**: Native AST parsing for **TS, JS, Python, Java, Dart, C++, Go, Rust, Ruby, and C#**.
 - **Autonomous Self-Healing**: Caught a syntax error? NovAST detects it via native parsers and forces the LLM to patch itself before the file even touches the disk.
 - **Antigravity Support**: Built-in `--payload` flag for direct integration with agentic AI assistants. It outputs the surgical context directly to stdout for LLM consumption.
+- **Web Bridge**: Inject context into **ChatGPT, Gemini, and Claude** via the provided Userscript.
 - **VS Code Extension**: Real-time surgical context generation directly from your editor.
 
 ## Installation
