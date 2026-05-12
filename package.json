@@ -7,23 +7,25 @@
     "novast": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "novast-core"
   ],
   "scripts": {
     "build:core": "cd novast-core && napi build --platform --release",
     "build:cli": "tsup",
     "postbuild": "cp novast-core/*.node ./dist/ || true",
     "build": "npm run build:core && npm run build:cli",
+    "postinstall": "node scripts/postinstall.js",
     "dev": "ts-node src/cli.ts"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.2.0",
     "@types/node": "^20.12.7",
     "ts-node": "^10.9.2",
     "tsup": "^8.0.2",
     "typescript": "^5.4.5"
   },
   "dependencies": {
+    "@napi-rs/cli": "^3.2.0",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12"
   }
