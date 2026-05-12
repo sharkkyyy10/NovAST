@@ -75,7 +75,7 @@ connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
   }
 });
 
-// Mad Scientist: HTTP Bridge for Web LLMs
+// HTTP Bridge for Web LLMs
 const bridgeServer = http.createServer((req, res) => {
   // CORS for web LLMs
   res.setHeader('Access-Control-Allow-Origin', '*');
