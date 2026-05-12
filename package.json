@@ -14,7 +14,7 @@
     "build:core": "cd novast-core && napi build --platform --release",
     "build:cli": "tsup",
     "build": "npm run build:core && npm run build:cli",
-    "install": "npm run build:core",
+    "install": "cd novast-core && ../node_modules/.bin/napi build --platform --release",
     "dev": "ts-node src/cli.ts"
   },
   "devDependencies": {
