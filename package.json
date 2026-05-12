@@ -14,9 +14,11 @@
     "build:cli": "tsup",
     "postbuild": "cp novast-core/*.node ./dist/ || true",
     "build": "npm run build:core && npm run build:cli",
+    "prepare": "npm run build",
     "dev": "ts-node src/cli.ts"
   },
   "devDependencies": {
+    "@napi-rs/cli": "^3.2.0",
     "@types/node": "^20.12.7",
     "ts-node": "^10.9.2",
     "tsup": "^8.0.2",
