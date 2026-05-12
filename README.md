@@ -12,11 +12,11 @@ NovAST is a high-performance CLI middleware that acts as a surgical **Input Rout
 | **Vector RAG** | Variable | Fragmented | Med | No |
 | **NovAST Core** | **< 5%** | **Surgical / Deep** | **Sub-50ms** | **Yes** |
 
-## God-Tier Features
+## Advanced Features
 
 - **The Knapsack Protocol**: 0-1 Knapsack algorithm implemented in Rust for strict token budgeting. Give NovAST a 4,000 token limit, and it will mathematically guarantee the highest-value architectural context is packed first.
 - **Parallel Gravity Indexer**: Powered by `Rayon`. It indexes your entire workspace across all CPU cores, mapping "Gravity" (dependency density) to identify which files are the true architectural epicenters.
-- **Polyglot God Support**: Native AST parsing for **TS, JS, Python, Java, Dart, C++, Go, Rust, Ruby, and C#**.
+- **Universal Polyglot Support**: Native AST parsing for **TS, JS, Python, Java, Dart, C++, Go, Rust, Ruby, and C#**.
 - **Autonomous Self-Healing**: Caught a syntax error? NovAST detects it via native parsers and forces the LLM to patch itself before the file even touches the disk.
 - **Antigravity Support**: Built-in `--payload` flag for direct integration with agentic AI assistants. It outputs the surgical context directly to stdout for LLM consumption.
 - **VS Code Extension**: Real-time surgical context generation directly from your editor.
