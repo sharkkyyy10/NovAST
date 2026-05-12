@@ -7,6 +7,19 @@ import { resolveWorkspaceDependencies } from './resolver';
 
 async function main() {
   const args = process.argv.slice(2);
+  
+  if (args.includes('--payload')) {
+    const targetIdx = args.findIndex(a => !a.startsWith('--'));
+    const target = args[targetIdx];
+    const [filePath, lineStr] = target.split(':');
+    const cursorLine = parseInt(lineStr, 10) - 1;
+    const ext = path.extname(filePath);
+    const code = fs.readFileSync(filePath, 'utf-8');
+    const payload = buildPayload("Payload request", code, ext, cursorLine);
+    console.log(JSON.stringify(payload, null, 2));
+    process.exit(0);
+  }
+
   if (args.length < 2) {
     console.error('[NovAST] Usage: novast <file:line> "<prompt>"');
     process.exit(1);
