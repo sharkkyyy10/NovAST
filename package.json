@@ -15,7 +15,7 @@
     "build:cli": "tsup",
     "postbuild": "cp novast-core/*.node ./dist/ || true",
     "build": "npm run build:core && npm run build:cli",
-    "postinstall": "npm run build:core && npm run postbuild",
+    "install": "npm run build:core && npm run postbuild",
     "dev": "ts-node src/cli.ts"
   },
   "devDependencies": {
