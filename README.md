@@ -1,43 +1,45 @@
-# NovAST
+# NovAST 🛰️
 
-**Don't send the file. Send the Heatmap.**
+### Stop sending the file. Send the Heatmap.
 
-NovAST is an autonomous, local CLI middleware powered by a native Rust engine (NAPI-RS) and Tree-sitter. It parses Abstract Syntax Trees across 5 languages (TS, JS, Python, Java, Dart) to extract ultra-dense context "Heatmaps." 
-
-The result? You drop LLM input tokens by 90% while keeping 100% of the architectural fidelity intact. It features a Cross-File Dependency Resolver for deep context and an Autonomous Self-Healing loop that catches syntax errors and forces the LLM to patch them before writing to disk.
+NovAST is a high-performance CLI middleware that acts as a surgical **Input Router** for LLMs. It uses a native Rust engine (`novast-core`) and Tree-sitter to strip 90% of the noise from your codebase while retaining 100% of the architectural context.
 
 ## The Benchmark
 
-| Method | Token Overhead | Architectural Context | Latency | Self-Healing |
+| Method | Token Waste | Architectural Context | Latency | Self-Healing |
 | :--- | :--- | :--- | :--- | :--- |
-| **Standard Paste** | 100% (Massive) | Full (Bloated) | Slow | No |
-| **Caveman / Prompt Hacks**| Variable | Fragmented | Med | No |
-| **NovAST Core** | **< 5%** | **Surgical / Complete** | **< 50ms (Native Rust)** | **Yes** |
+| **Standard Copy-Paste** | 100% (Bloated) | Full (Noise) | Slow | No |
+| **Vector RAG** | Variable | Fragmented | Med | No |
+| **NovAST Core** | **< 5%** | **Surgical / Deep** | **Sub-50ms** | **Yes** |
 
-## Why it Wins
+## God-Tier Features
 
-Vector RAG strips the structure. Standard copy-pasting blows up your context window and dilutes the LLM's focus. 
-
-NovAST is a surgical **Input Router**. By leveraging native Rust AST parsing, it strips out irrelevant function bodies and leaves only the structural skeleton (the Periphery) and the specific target code (the Epicenter). This means zero IQ loss for the LLM. It gets exactly what it needs to understand the architecture, and nothing more.
+- **The Knapsack Protocol**: 0-1 Knapsack algorithm implemented in Rust for strict token budgeting. Give NovAST a 4,000 token limit, and it will mathematically guarantee the highest-value architectural context is packed first.
+- **Parallel Gravity Indexer**: Powered by `Rayon`. It indexes your entire workspace across all CPU cores, mapping "Gravity" (dependency density) to identify which files are the true architectural epicenters.
+- **Polyglot God Support**: Native AST parsing for **TS, JS, Python, Java, Dart, C++, Go, Rust, Ruby, and C#**.
+- **Autonomous Self-Healing**: Caught a syntax error? NovAST detects it via native parsers and forces the LLM to patch itself before the file even touches the disk.
 
 ## Installation
 
-Zero friction. Get it globally:
+Install globally directly from the source. No bloated registries, just raw native power.
 
 ```bash
-npm install -g novast
+npm install -g https://github.com/sharkkyyy10/NovAST/tarball/main
 ```
 
 ## Usage
 
-Point NovAST at your target and give it the directive. It handles the extraction, resolution, LLM routing, and injection.
+Point NovAST at a specific file and line, then tell it what to do. It handles the extraction, workspace resolution, and injection.
 
 ```bash
-novast src/auth.ts:42 "Add rate limiting"
+novast src/engine/core.ts:42 "Refactor the parallel loop to use the new Knapsack solver"
 ```
 
-## The V2 Roadmap
+## Why?
 
-V1 runs a blistering fast Rust parser inside Node. V2 will be a 100% Rust LSP Daemon. 
+Because sending 2,000 lines of code to an LLM is amateur. It dilutes the model's focus and drains your wallet. NovAST treats your codebase like a graph, extracting the **Epicenter** (the code you're changing) and the **Periphery** (the structural skeleton) so the LLM has zero IQ loss and maximum context.
 
-I am actively looking for open-source contributors to help oxidize the orchestration layer. If you want to build the future of autonomous agentic tooling, check out the issues and drop a PR.
+---
+
+Built by a solo dev for the elite. Use it or keep wasting tokens.
+
