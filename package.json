@@ -11,11 +11,11 @@
     "novast-core"
   ],
   "scripts": {
-    "build:core": "cd novast-core && npx --yes napi build --platform --release",
-    "build:cli": "npx --yes tsup",
+    "build:core": "cd novast-core && napi build --platform --release",
+    "build:cli": "tsup",
     "postbuild": "cp novast-core/*.node ./dist/ || true",
     "build": "npm run build:core && npm run build:cli",
-    "prepare": "npm run build",
+    "postinstall": "npm run build:core && npm run postbuild",
     "dev": "ts-node src/cli.ts"
   },
   "devDependencies": {
