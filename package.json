@@ -10,8 +10,8 @@
     "dist"
   ],
   "scripts": {
-    "build:core": "cd novast-core && node ../node_modules/.bin/napi build --platform --release",
-    "build:cli": "node node_modules/.bin/tsup",
+    "build:core": "cd novast-core && napi build --platform --release",
+    "build:cli": "tsup",
     "postbuild": "cp novast-core/*.node ./dist/ || true",
     "build": "npm run build:core && npm run build:cli",
     "prepare": "npm run build",
