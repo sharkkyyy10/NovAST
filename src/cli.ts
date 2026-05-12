@@ -8,7 +8,7 @@ import { resolveWorkspaceDependencies } from './resolver';
 async function main() {
   const args = process.argv.slice(2);
   if (args.length < 2) {
-    console.error('[NovAST] Usage: npx ts-node src/cli.ts <file:line> "<prompt>"');
+    console.error('[NovAST] Usage: novast <file:line> "<prompt>"');
     process.exit(1);
   }
 
