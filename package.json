@@ -13,9 +13,8 @@
   "scripts": {
     "build:core": "cd novast-core && napi build --platform --release",
     "build:cli": "tsup",
-    "postbuild": "cp novast-core/*.node ./dist/ || true",
     "build": "npm run build:core && npm run build:cli",
-    "install": "npm run build:core && npm run postbuild",
+    "install": "node scripts/install.js",
     "dev": "ts-node src/cli.ts"
   },
   "devDependencies": {
