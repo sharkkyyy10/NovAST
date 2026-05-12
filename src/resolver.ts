@@ -4,7 +4,7 @@ import { extractSkeleton, getLocalImports } from '../novast-core';
 
 export function resolveWorkspaceDependencies(filePath: string, code: string, ext: string): string {
   const baseDir = path.dirname(filePath);
-  
+
   let localPaths: string[];
   try {
     localPaths = getLocalImports(code, ext);
@@ -34,7 +34,7 @@ export function resolveWorkspaceDependencies(filePath: string, code: string, ext
       const fileCode = fs.readFileSync(resolvedPath, 'utf-8');
       const fileExt = path.extname(resolvedPath);
       const skeleton = extractSkeleton(fileCode, fileExt);
-      
+
       context += `// === [WORKSPACE CONTEXT: ${path.basename(resolvedPath)}] ===\n${skeleton}\n\n`;
     } catch {
       continue;
