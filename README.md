@@ -18,6 +18,8 @@ NovAST is a high-performance CLI middleware that acts as a surgical **Input Rout
 - **Parallel Gravity Indexer**: Powered by `Rayon`. It indexes your entire workspace across all CPU cores, mapping "Gravity" (dependency density) to identify which files are the true architectural epicenters.
 - **Polyglot God Support**: Native AST parsing for **TS, JS, Python, Java, Dart, C++, Go, Rust, Ruby, and C#**.
 - **Autonomous Self-Healing**: Caught a syntax error? NovAST detects it via native parsers and forces the LLM to patch itself before the file even touches the disk.
+- **Antigravity Support**: Built-in `--payload` flag for direct integration with agentic AI assistants. It outputs the surgical context directly to stdout for LLM consumption.
+- **VS Code Extension**: Real-time surgical context generation directly from your editor.
 
 ## Installation
 
@@ -29,10 +31,18 @@ npm install -g https://github.com/sharkkyyy10/NovAST/tarball/main
 
 ## Usage
 
+### For Humans:
 Point NovAST at a specific file and line, then tell it what to do. It handles the extraction, workspace resolution, and injection.
 
 ```bash
 novast src/engine/core.ts:42 "Refactor the parallel loop to use the new Knapsack solver"
+```
+
+### For AI Assistants (Antigravity Mode):
+Get the raw surgical context to inject into your own prompt.
+
+```bash
+novast --payload src/engine/core.ts:42
 ```
 
 ## Why?
